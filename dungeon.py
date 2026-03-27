@@ -1,147 +1,85 @@
-import pygame
 import random
 
-TILE_FLOOR = 0
-TILE_WALL = 1
+TILE_WALL = 0
+TILE_FLOOR = 1
 TILE_DOOR = 2
 
-class Room:
-    def __init__(self, x, y, w, h):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
-        self.center_x = x + w // 2
-        self.center_y = y + h // 2
-        self.enemies = []
-        self.cleared = False
-        self.visited = False
-
-    def intersects(self, other, padding=2):
-        return (self.x - padding < other.x + other.w and
-                self.x + self.w + padding > other.x and
-                self.y - padding < other.y + other.h and
-                self.y + self.h + padding > other.y)
-
-
 class Dungeon:
-    def __init__(self, screen_w=1280, screen_h=720, floor=0):
-        self.tile_size = 40
-        self.floor = floor
-        self.map_w = 80
-        self.map_h = 60
-        self.grid = [[TILE_WALL] * self.map_w for _ in range(self.map_h)]
+    def __init__(self, width, height, floor_num=1):
+        self.width = width
+        self.height = height
+        self.floor_num = floor_num
+        self.tiles = [[TILE_WALL] * width for _ in range(height)]
         self.rooms = []
-        self.screen_w = screen_w
-        self.screen_h = screen_h
-        self._generate(floor)
 
-    def _generate(self, floor):
-        from enemies import MeleeEnemy, RangedEnemy, BossEnemy
-        num_rooms = 6 + floor * 2
-        num_rooms = min(num_rooms, 14)
-        max_attempts = 200
+    def get_tile(self, tx, ty):
+        if tx < 0 or ty < 0 or tx >= self.width or ty >= self.height:
+            return TILE_WALL
+        return self.tiles[ty][tx]
 
-        for _ in range(max_attempts):
+    def set_tile(self, tx, ty, tile):
+        if 0 <= tx < self.width and 0 <= ty < self.height:
+            self.tiles[ty][tx] = tile
+
+    def generate(self):
+        num_rooms = 6 + self.floor_num * 2
+        num_rooms = min(num_rooms, 16)
+        attempts = 200
+        min_w, max_w = 6, 12
+        min_h, max_h = 6, 10
+
+        for _ in range(attempts):
             if len(self.rooms) >= num_rooms:
                 break
-            w = random.randint(5, 10)
-            h = random.randint(5, 8)
-            x = random.randint(1, self.map_w - w - 2)
-            y = random.randint(1, self.map_h - h - 2)
-            room = Room(x, y, w, h)
-            if any(room.intersects(r) for r in self.rooms):
-                continue
-            self._carve_room(room)
-            if self.rooms:
-                prev = self.rooms[-1]
-                self._carve_corridor(prev.center_x, prev.center_y, room.center_x, room.center_y)
-            self.rooms.append(room)
+            rw = random.randint(min_w, max_w)
+            rh = random.randint(min_h, max_h)
+            rx = random.randint(1, self.width - rw - 1)
+            ry = random.randint(1, self.height - rh - 1)
+            room = {'x': rx, 'y': ry, 'w': rw, 'h': rh}
+            if not self._overlaps(room):
+                self.rooms.append(room)
+                self._carve_room(room)
 
-        for i, room in enumerate(self.rooms):
-            if i == 0:
-                room.visited = True
-                continue
-            count = 1 + floor // 2
-            is_boss_room = (i == len(self.rooms) - 1)
-            if is_boss_room:
-                boss = BossEnemy(
-                    room.center_x * self.tile_size - 20,
-                    room.center_y * self.tile_size - 20,
-                    floor
-                )
-                room.enemies.append(boss)
-            else:
-                for _ in range(count + random.randint(0, 2)):
-                    ex = random.randint(room.x + 1, room.x + room.w - 2) * self.tile_size
-                    ey = random.randint(room.y + 1, room.y + room.h - 2) * self.tile_size
-                    if random.random() < 0.4:
-                        room.enemies.append(RangedEnemy(ex, ey, floor))
-                    else:
-                        room.enemies.append(MeleeEnemy(ex, ey, floor))
+        for i in range(1, len(self.rooms)):
+            self._connect_rooms(self.rooms[i - 1], self.rooms[i])
+
+        self._place_doors()
+
+    def _overlaps(self, room, margin=2):
+        for r in self.rooms:
+            if (room['x'] < r['x'] + r['w'] + margin and
+                room['x'] + room['w'] + margin > r['x'] and
+                room['y'] < r['y'] + r['h'] + margin and
+                room['y'] + room['h'] + margin > r['y']):
+                return True
+        return False
 
     def _carve_room(self, room):
-        for y in range(room.y, room.y + room.h):
-            for x in range(room.x, room.x + room.w):
-                self.grid[y][x] = TILE_FLOOR
+        for ty in range(room['y'], room['y'] + room['h']):
+            for tx in range(room['x'], room['x'] + room['w']):
+                self.set_tile(tx, ty, TILE_FLOOR)
 
-    def _carve_corridor(self, x1, y1, x2, y2):
-        x, y = x1, y1
-        while x != x2:
-            self.grid[y][x] = TILE_FLOOR
-            x += 1 if x2 > x else -1
-        while y != y2:
-            self.grid[y][x] = TILE_FLOOR
-            y += 1 if y2 > y else -1
+    def _connect_rooms(self, r1, r2):
+        cx1 = r1['x'] + r1['w'] // 2
+        cy1 = r1['y'] + r1['h'] // 2
+        cx2 = r2['x'] + r2['w'] // 2
+        cy2 = r2['y'] + r2['h'] // 2
+        if random.random() < 0.5:
+            self._carve_h_corridor(min(cx1, cx2), max(cx1, cx2), cy1)
+            self._carve_v_corridor(min(cy1, cy2), max(cy1, cy2), cx2)
+        else:
+            self._carve_v_corridor(min(cy1, cy2), max(cy1, cy2), cx1)
+            self._carve_h_corridor(min(cx1, cx2), max(cx1, cx2), cy2)
 
-    def is_wall(self, tx, ty):
-        if tx < 0 or ty < 0 or tx >= self.map_w or ty >= self.map_h:
-            return True
-        return self.grid[ty][tx] == TILE_WALL
+    def _carve_h_corridor(self, x0, x1, y):
+        for x in range(x0, x1 + 1):
+            self.set_tile(x, y, TILE_FLOOR)
+            self.set_tile(x, y + 1, TILE_FLOOR)
 
-    def get_room_at(self, wx, wy):
-        tx = int(wx // self.tile_size)
-        ty = int(wy // self.tile_size)
-        for room in self.rooms:
-            if room.x <= tx < room.x + room.w and room.y <= ty < room.y + room.h:
-                if not room.visited:
-                    room.visited = True
-                return room
-        return None
+    def _carve_v_corridor(self, y0, y1, x):
+        for y in range(y0, y1 + 1):
+            self.set_tile(x, y, TILE_FLOOR)
+            self.set_tile(x + 1, y, TILE_FLOOR)
 
-    def is_room_cleared(self, room):
-        return all(not e.alive for e in room.enemies)
-
-    def get_active_enemies(self):
-        result = []
-        for room in self.rooms:
-            if room.visited:
-                for e in room.enemies:
-                    if e.alive:
-                        result.append(e)
-        return result
-
-    def all_rooms_cleared(self):
-        return all(r.cleared for r in self.rooms)
-
-    def draw(self, surface, camera_x, camera_y):
-        ts = self.tile_size
-        start_tx = max(0, camera_x // ts)
-        start_ty = max(0, camera_y // ts)
-        end_tx = min(self.map_w, (camera_x + self.screen_w) // ts + 2)
-        end_ty = min(self.map_h, (camera_y + self.screen_h) // ts + 2)
-
-        floor_color = (50, 50, 60)
-        wall_color = (25, 25, 35)
-        wall_top = (40, 40, 55)
-
-        for ty in range(start_ty, end_ty):
-            for tx in range(start_tx, end_tx):
-                sx = tx * ts - camera_x
-                sy = ty * ts - camera_y
-                if self.grid[ty][tx] == TILE_WALL:
-                    pygame.draw.rect(surface, wall_color, (sx, sy, ts, ts))
-                    pygame.draw.rect(surface, wall_top, (sx, sy, ts, 3))
-                else:
-                    pygame.draw.rect(surface, floor_color, (sx, sy, ts, ts))
-                    pygame.draw.rect(surface, (45, 45, 55), (sx, sy, ts, ts), 1)
+    def _place_doors(self):
+        pass  # Doors are handled logically; tiles are floor tiles for corridors
