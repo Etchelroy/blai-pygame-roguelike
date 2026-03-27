@@ -1,44 +1,41 @@
 import pygame
 
-class ItemPickup:
-    def __init__(self, x, y, item_type):
-        self.x = float(x - 12)
-        self.y = float(y - 12)
-        self.size = 24
-        self.item_type = item_type
-        self.collected = False
-        self.bob = 0.0
-        self.bob_speed = 2.0
+ITEM_COLORS = {
+    'health': (50, 220, 80),
+    'damage': (220, 80, 50),
+    'speed':  (80, 150, 220),
+}
 
-        if item_type == 'health':
-            self.color = (60, 220, 80)
-            self.label = 'HP'
-        elif item_type == 'damage':
-            self.color = (220, 80, 60)
-            self.label = 'DMG'
-        else:
-            self.color = (80, 160, 255)
-            self.label = 'SPD'
+ITEM_LABELS = {
+    'health': 'HP+',
+    'damage': 'DMG+',
+    'speed':  'SPD+',
+}
+
+class Item:
+    def __init__(self, x, y, kind):
+        self.x = x
+        self.y = y
+        self.kind = kind
+        self.collected = False
+        self.pulse = 0.0
 
     def apply(self, player):
-        if self.item_type == 'health':
-            player.hp = min(player.max_hp, player.hp + 40)
-        elif self.item_type == 'damage':
+        self.collected = True
+        if self.kind == 'health':
+            player.hp = min(player.max_hp, player.hp + 30)
+        elif self.kind == 'damage':
             player.damage = int(player.damage * 1.25)
-        elif self.item_type == 'speed':
-            player.speed = int(player.speed * 1.15)
+        elif self.kind == 'speed':
+            player.speed = min(300, int(player.speed * 1.15))
 
-    def draw(self, surface, camera_x, camera_y):
+    def draw(self, surf, sx, sy):
         import math
-        self.bob += 0.05
-        bob_offset = int(math.sin(self.bob * self.bob_speed * 3) * 4)
-        sx = int(self.x - camera_x)
-        sy = int(self.y - camera_y + bob_offset)
-        
-        pygame.draw.rect(surface, (30, 30, 40), (sx - 2, sy - 2, self.size + 4, self.size + 4))
-        pygame.draw.rect(surface, self.color, (sx, sy, self.size, self.size))
-        pygame.draw.rect(surface, (255, 255, 255), (sx, sy, self.size, self.size), 2)
-        
-        font = pygame.font.SysFont('Arial', 9, bold=True)
-        text = font.render(self.label, True, (255, 255, 255))
-        surface.blit(text, (sx + self.size//2 - text.get_width()//2, sy + self.size//2 - text.get_height()//2))
+        self.pulse += 0.05
+        r = int(10 + math.sin(self.pulse) * 2)
+        color = ITEM_COLORS.get(self.kind, (200, 200, 200))
+        pygame.draw.circle(surf, color, (sx, sy), r)
+        pygame.draw.circle(surf, (255, 255, 255), (sx, sy), r, 2)
+        font = pygame.font.SysFont(None, 16)
+        label = font.render(ITEM_LABELS.get(self.kind, '?'), True, (255, 255, 255))
+        surf.blit(label, (sx - label.get_width() // 2, sy - label.get_height() // 2))
