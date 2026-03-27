@@ -1,64 +1,53 @@
 import pygame
-import random
+import math
 
-class Item:
-    def __init__(self, x, y, item_type):
+class Projectile:
+    def __init__(self, x, y, vx, vy, damage, hostile=False, radius=4):
         self.x = x
         self.y = y
-        self.item_type = item_type
-        self.radius = 8
-        self.lifetime = 30.0
+        self.vx = vx
+        self.vy = vy
+        self.damage = damage
+        self.hostile = hostile
+        self.radius = radius
+        self.lifetime = 10.0
+    
+    def update(self, delta_time):
+        """Update projectile position"""
+        self.x += self.vx * delta_time
+        self.y += self.vy * delta_time
+        self.lifetime -= delta_time
+    
+    def is_alive(self):
+        """Check if projectile is still active"""
+        return self.lifetime > 0
+    
+    def render(self, surface):
+        """Draw projectile"""
+        color = (255, 100, 100) if self.hostile else (100, 255, 100)
+        pygame.draw.circle(surface, color, (int(self.x), int(self.y)), self.radius)
 
-        if item_type == 'health':
-            self.color = (0, 255, 0)
-            self.value = 30
-        elif item_type == 'damage':
-            self.color = (255, 0, 0)
-            self.value = 5
-        elif item_type == 'speed':
-            self.color = (0, 0, 255)
-            self.value = 50
-
-    def get_rect(self):
-        return pygame.Rect(self.x - self.radius, self.y - self.radius, self.radius * 2, self.radius * 2)
-
-    def draw(self, surface):
-        pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)
-
-class ItemManager:
+class ProjectileManager:
     def __init__(self):
-        self.items = []
-
-    def spawn_items(self, room):
-        if len(room.enemies) == 0:
-            num_items = random.randint(1, 3)
-            for _ in range(num_items):
-                x = room.x + random.randint(50, room.width - 50)
-                y = room.y + random.randint(50, room.height - 50)
-                item_type = random.choice(['health', 'damage', 'speed'])
-                item = Item(x, y, item_type)
-                self.items.append(item)
-
-    def clear_items(self):
-        self.items = []
-
-    def update(self, dt):
-        for item in self.items[:]:
-            item.lifetime -= dt
-            if item.lifetime <= 0:
-                self.items.remove(item)
-
-    def check_player_collision(self, player):
-        for item in self.items[:]:
-            if player.get_rect().colliderect(item.get_rect()):
-                if item.item_type == 'health':
-                    player.heal(item.value)
-                elif item.item_type == 'damage':
-                    player.damage += item.value
-                elif item.item_type == 'speed':
-                    player.speed += item.value
-                self.items.remove(item)
-
-    def draw(self, surface):
-        for item in self.items:
-            item.draw(surface)
+        self.projectiles = []
+    
+    def add(self, projectile):
+        """Add projectile"""
+        self.projectiles.append(projectile)
+    
+    def remove(self, projectile):
+        """Remove projectile"""
+        if projectile in self.projectiles:
+            self.projectiles.remove(projectile)
+    
+    def update(self, delta_time, dungeon):
+        """Update all projectiles"""
+        for proj in list(self.projectiles):
+            proj.update(delta_time)
+            if not proj.is_alive():
+                self.remove(proj)
+    
+    def render(self, surface):
+        """Render all projectiles"""
+        for proj in self.projectiles:
+            proj.render(surface)
