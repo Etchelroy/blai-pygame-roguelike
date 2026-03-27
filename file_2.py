@@ -1,134 +1,165 @@
 import pygame
 import math
+from player import Player
+from enemies import EnemyManager
+from projectiles import ProjectileManager
+from items import ItemManager
+from dungeon import Dungeon
+from collision import CollisionManager
+from hud import HUD
+from screens import DeathScreen
+from utils import clamp
 
-class Player:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-        self.width = 20
-        self.height = 20
-        self.speed = 200
-        self.dash_speed = 500
-        self.dash_duration = 0.15
-        self.dash_cooldown = 0.5
-        self.dash_time = 0
-        self.dash_cooldown_time = 0
-        self.velocity_x = 0
-        self.velocity_y = 0
-        self.health = 100
-        self.max_health = 100
-        self.damage = 10
-        self.projectiles = []
-        self.shoot_cooldown = 0.1
-        self.shoot_time = 0
-        self.dashing = False
-        self.dash_dir_x = 0
-        self.dash_dir_y = 0
-
-    def update(self, dt, keys, mouse_pos):
-        self.shoot_time = max(0, self.shoot_time - dt)
-        self.dash_time = max(0, self.dash_time - dt)
-        self.dash_cooldown_time = max(0, self.dash_cooldown_time - dt)
-
-        vel_x = vel_y = 0
-        if keys[pygame.K_w]:
-            vel_y -= 1
-        if keys[pygame.K_s]:
-            vel_y += 1
-        if keys[pygame.K_a]:
-            vel_x -= 1
-        if keys[pygame.K_d]:
-            vel_x += 1
-
-        if vel_x != 0 or vel_y != 0:
-            length = math.sqrt(vel_x**2 + vel_y**2)
-            vel_x /= length
-            vel_y /= length
-
-        if self.dashing:
-            self.velocity_x = self.dash_dir_x * self.dash_speed
-            self.velocity_y = self.dash_dir_y * self.dash_speed
-            if self.dash_time <= 0:
-                self.dashing = False
-                self.velocity_x = vel_x * self.speed
-                self.velocity_y = vel_y * self.speed
-        else:
-            self.velocity_x = vel_x * self.speed
-            self.velocity_y = vel_y * self.speed
-
-        self.x += self.velocity_x * dt
-        self.y += self.velocity_y * dt
-
-        dx = mouse_pos[0] - self.x
-        dy = mouse_pos[1] - self.y
-        dist = math.sqrt(dx**2 + dy**2)
-        if dist > 0:
-            self.aim_x = dx / dist
-            self.aim_y = dy / dist
-        else:
-            self.aim_x = 1
-            self.aim_y = 0
-
-        for projectile in self.projectiles[:]:
-            projectile['x'] += projectile['vx'] * dt
-            projectile['y'] += projectile['vy'] * dt
-            projectile['lifetime'] -= dt
-            if projectile['lifetime'] <= 0:
-                self.projectiles.remove(projectile)
-
-    def shoot(self):
-        if self.shoot_time <= 0:
-            projectile = {
-                'x': self.x,
-                'y': self.y,
-                'vx': self.aim_x * 400,
-                'vy': self.aim_y * 400,
-                'lifetime': 5.0,
-                'radius': 5,
-                'damage': self.damage
-            }
-            self.projectiles.append(projectile)
-            self.shoot_time = self.shoot_cooldown
-
-    def dash(self):
-        if self.dash_cooldown_time <= 0 and not self.dashing:
-            vel_x = vel_y = 0
-            if pygame.key.get_pressed()[pygame.K_w]:
-                vel_y -= 1
-            if pygame.key.get_pressed()[pygame.K_s]:
-                vel_y += 1
-            if pygame.key.get_pressed()[pygame.K_a]:
-                vel_x -= 1
-            if pygame.key.get_pressed()[pygame.K_d]:
-                vel_x += 1
-
-            if vel_x == 0 and vel_y == 0:
-                vel_x = 1
-
-            length = math.sqrt(vel_x**2 + vel_y**2)
-            self.dash_dir_x = vel_x / length
-            self.dash_dir_y = vel_y / length
-
-            self.dashing = True
-            self.dash_time = self.dash_duration
-            self.dash_cooldown_time = self.dash_cooldown
-
-    def take_damage(self, damage):
-        self.health -= damage
-        return self.health <= 0
-
-    def heal(self, amount):
-        self.health = min(self.max_health, self.health + amount)
-
-    def get_rect(self):
-        return pygame.Rect(self.x - self.width // 2, self.y - self.height // 2, self.width, self.height)
-
-    def draw(self, surface):
-        color = (0, 255, 0) if not self.dashing else (100, 255, 100)
-        pygame.draw.rect(surface, color, self.get_rect())
-        end_x = self.x + self.aim_x * 30
-        end_y = self.y + self.aim_y * 30
-        pygame.draw.line(surface, (255, 255, 0), (self.x, self.y), (end_x, end_y), 2)
-
-        for projectile in self.projectiles:
-            pygame.draw.circle(surface, (255, 255, 0), (int(projectile['x']), int(projectile['y'])), projectile['radius'])
+class Game:
+    def __init__(self, width=1280, height=720):
+        self.width = width
+        self.height = height
+        self.screen = pygame.display.set_mode((width, height))
+        pygame.display.set_caption("Roguelike Dungeon")
+        self.clock = pygame.time.Clock()
+        self.running = True
+        self.state = "playing"  # "playing", "death"
+        
+        self.dungeon = Dungeon(width, height)
+        self.player = Player(width // 2, height // 2)
+        self.enemy_manager = EnemyManager()
+        self.projectile_manager = ProjectileManager()
+        self.item_manager = ItemManager()
+        self.collision_manager = CollisionManager()
+        self.hud = HUD()
+        self.death_screen = None
+        
+        self.floor = 0
+        self.enemies_killed = 0
+        self.spawn_enemies_for_floor(self.floor)
+        
+    def spawn_enemies_for_floor(self, floor):
+        """Spawn enemies based on floor number"""
+        count = 3 + floor * 2
+        for _ in range(count):
+            self.enemy_manager.spawn_random(self.width, self.height, self.dungeon)
+    
+    def handle_input(self, delta_time):
+        """Handle player input with delta-time"""
+        keys = pygame.key.get_pressed()
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        
+        # WASD movement
+        move_x = (keys[pygame.K_d] - keys[pygame.K_a])
+        move_y = (keys[pygame.K_s] - keys[pygame.K_w])
+        
+        if move_x != 0 or move_y != 0:
+            length = math.sqrt(move_x**2 + move_y**2)
+            move_x /= length
+            move_y /= length
+            self.player.move(move_x, move_y, delta_time, self.dungeon)
+        
+        # Mouse aim
+        dx = mouse_x - self.player.x
+        dy = mouse_y - self.player.y
+        if dx != 0 or dy != 0:
+            self.player.angle = math.atan2(dy, dx)
+        
+        # Spacebar dash
+        if keys[pygame.K_SPACE]:
+            self.player.attempt_dash(delta_time)
+    
+    def handle_events(self):
+        """Handle pygame events"""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # Shoot projectile
+                proj = self.player.shoot()
+                if proj:
+                    self.projectile_manager.add(proj)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self.running = False
+    
+    def update(self, delta_time):
+        """Update game state"""
+        if self.state == "death":
+            return
+        
+        self.player.update(delta_time)
+        self.enemy_manager.update(delta_time, self.player, self.projectile_manager, self.dungeon)
+        self.projectile_manager.update(delta_time, self.dungeon)
+        self.item_manager.update(delta_time)
+        
+        # Collision: projectiles vs enemies
+        for proj in list(self.projectile_manager.projectiles):
+            for enemy in list(self.enemy_manager.enemies):
+                if self.collision_manager.circles_overlap(
+                    proj.x, proj.y, proj.radius,
+                    enemy.x, enemy.y, enemy.radius
+                ):
+                    enemy.take_damage(proj.damage)
+                    self.projectile_manager.remove(proj)
+                    if enemy.health <= 0:
+                        self.enemies_killed += 1
+                        self.item_manager.spawn_item(enemy.x, enemy.y)
+                        self.enemy_manager.remove(enemy)
+                    break
+        
+        # Collision: projectiles vs walls
+        for proj in list(self.projectile_manager.projectiles):
+            if self.dungeon.collides_with_walls(proj.x, proj.y, proj.radius):
+                self.projectile_manager.remove(proj)
+        
+        # Collision: player vs items
+        for item in list(self.item_manager.items):
+            if self.collision_manager.circles_overlap(
+                self.player.x, self.player.y, self.player.radius,
+                item.x, item.y, item.radius
+            ):
+                item.apply(self.player)
+                self.item_manager.remove(item)
+        
+        # Collision: player vs enemies
+        for enemy in list(self.enemy_manager.enemies):
+            if self.collision_manager.circles_overlap(
+                self.player.x, self.player.y, self.player.radius,
+                enemy.x, enemy.y, enemy.radius
+            ):
+                self.player.take_damage(1)
+                if self.player.health <= 0:
+                    self.state = "death"
+                    self.death_screen = DeathScreen(
+                        self.floor, self.enemies_killed, 
+                        self.hud.time_survived
+                    )
+        
+        # Check floor completion
+        if len(self.enemy_manager.enemies) == 0 and self.floor < 10:
+            self.floor += 1
+            self.spawn_enemies_for_floor(self.floor)
+    
+    def render(self):
+        """Render game"""
+        self.screen.fill((20, 20, 30))
+        
+        if self.state == "playing":
+            self.dungeon.render(self.screen)
+            self.player.render(self.screen)
+            self.enemy_manager.render(self.screen)
+            self.projectile_manager.render(self.screen)
+            self.item_manager.render(self.screen)
+            self.hud.render(self.screen, self.player, self.floor, self.enemies_killed)
+        elif self.state == "death":
+            self.death_screen.render(self.screen)
+        
+        pygame.display.flip()
+    
+    def run(self):
+        """Main game loop with delta-time"""
+        while self.running:
+            delta_time = self.clock.tick(60) / 1000.0  # 60 FPS, delta in seconds
+            self.hud.update_time(delta_time)
+            
+            self.handle_events()
+            self.handle_input(delta_time)
+            self.update(delta_time)
+            self.render()
+        
+        pygame.quit()
