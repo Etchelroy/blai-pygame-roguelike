@@ -124,3 +124,35 @@ class HUD:
         pygame.draw.rect(self.screen, (80, 160, 255), (dot_x - 1, dot_y - 1, 4, 4))
 
     
+Looking at the failing QA criteria, I need to implement complete versions of all files with proper controls, delta-time, collision, items, death screen, and all enemy types.
+
+```python
+# filename: main.py
+import pygame
+import sys
+from game import Game
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((1280, 720))
+    pygame.display.set_caption("Roguelike Dungeon")
+    clock = pygame.time.Clock()
+    game = Game(screen)
+    
+    while True:
+        dt = clock.tick(60) / 1000.0
+        dt = min(dt, 0.05)
+        
+        events = pygame.event.get()
+        for event in events:
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+        
+        game.handle_events(events)
+        game.update(dt)
+        game.draw()
+        pygame.display.flip()
+
+if __name__ == "__main__":
+    main()
