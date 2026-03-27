@@ -118,3 +118,206 @@ class UI:
         # Mana bar
         self._draw_bar(surf, px + 10, y, self.panel_w - 20, 18,
                        player.mana, player.max_mana, (50, 100, 210), (15,
+I'll analyze what's needed and implement the complete game across all six modules.
+
+```python
+# filename: main.py
+import pygame
+import sys
+import time
+from dungeon import Dungeon
+from player import Player
+from ui import UI
+from items import ItemPickup
+
+SCREEN_W, SCREEN_H = 1280, 720
+FPS = 60
+
+def run_game(screen, clock):
+    dungeon = Dungeon(screen_w=SCREEN_W, screen_h=SCREEN_H)
+    player = Player(0, 0)
+    ui = UI(SCREEN_W, SCREEN_H)
+    
+    start_room = dungeon.rooms[0]
+    player.x = start_room.center_x * dungeon.tile_size
+    player.y = start_room.center_y * dungeon.tile_size
+    
+    floors_cleared = 0
+    enemies_killed = 0
+    start_time = time.time()
+    current_floor_enemies_killed = 0
+    
+    item_pickups = []
+    between_rooms = False
+    pending_item = None
+    
+    camera_x, camera_y = 0, 0
+    
+    running = True
+    while running:
+        dt = clock.tick(FPS) / 1000.0
+        dt = min(dt, 0.05)
+        
+        mouse_pos = pygame.mouse.get_pos()
+        world_mouse_x = mouse_pos[0] + camera_x
+        world_mouse_y = mouse_pos[1] + camera_y
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return 'quit', 0, 0, 0
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return 'quit', floors_cleared, enemies_killed, time.time() - start_time
+                if event.key == pygame.K_SPACE:
+                    player.dash()
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    player.shoot(world_mouse_x, world_mouse_y)
+        
+        keys = pygame.key.get_pressed()
+        dx, dy = 0, 0
+        if keys[pygame.K_w] or keys[pygame.K_UP]: dy -= 1
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]: dy += 1
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]: dx -= 1
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]: dx += 1
+        
+        player.update(dt, dx, dy, dungeon)
+        player.update_projectiles(dt, dungeon)
+        
+        current_room = dungeon.get_room_at(player.x, player.y)
+        
+        if not between_rooms:
+            active_enemies = dungeon.get_active_enemies()
+            for enemy in active_enemies:
+                enemy.update(dt, player, dungeon)
+            
+            for proj in player.projectiles[:]:
+                for enemy in active_enemies[:]:
+                    if enemy.alive and proj.check_collision(enemy):
+                        enemy.take_damage(proj.damage)
+                        proj.active = False
+                        if not enemy.alive:
+                            enemies_killed += 1
+                            current_floor_enemies_killed += 1
+            
+            player.projectiles = [p for p in player.projectiles if p.active]
+            
+            for enemy in active_enemies:
+                if enemy.alive:
+                    for proj in enemy.projectiles[:]:
+                        if proj.check_collision(player):
+                            player.take_damage(proj.damage)
+                            proj.active = False
+                    enemy.projectiles = [p for p in enemy.projectiles if p.active]
+                    
+                    if enemy.enemy_type == 'melee':
+                        ex, ey = enemy.x + enemy.size//2, enemy.y + enemy.size//2
+                        px, py = player.x + player.size//2, player.y + player.size//2
+                        dist = ((ex-px)**2 + (ey-py)**2)**0.5
+                        if dist < (enemy.size + player.size) // 2 + 5:
+                            player.take_damage(enemy.contact_damage * dt)
+            
+            if current_room and dungeon.is_room_cleared(current_room):
+                if not current_room.cleared:
+                    current_room.cleared = True
+                    if current_room != dungeon.rooms[-1]:
+                        item_type = ['health', 'damage', 'speed'][current_floor_enemies_killed % 3]
+                        cx = current_room.center_x * dungeon.tile_size
+                        cy = current_room.center_y * dungeon.tile_size
+                        item_pickups.append(ItemPickup(cx, cy, item_type))
+            
+            for item in item_pickups[:]:
+                if not item.collected:
+                    px, py = player.x + player.size//2, player.y + player.size//2
+                    ix, iy = item.x + item.size//2, item.y + item.size//2
+                    dist = ((px-ix)**2 + (py-iy)**2)**0.5
+                    if dist < (player.size + item.size) // 2:
+                        item.apply(player)
+                        item.collected = True
+                        item_pickups.remove(item)
+            
+            if dungeon.all_rooms_cleared():
+                floors_cleared += 1
+                current_floor_enemies_killed = 0
+                dungeon = Dungeon(screen_w=SCREEN_W, screen_h=SCREEN_H, floor=floors_cleared)
+                item_pickups = []
+                start_room = dungeon.rooms[0]
+                player.x = start_room.center_x * dungeon.tile_size
+                player.y = start_room.center_y * dungeon.tile_size
+                player.projectiles = []
+        
+        if not player.alive:
+            elapsed = time.time() - start_time
+            return 'dead', floors_cleared, enemies_killed, elapsed
+        
+        camera_x = int(player.x + player.size // 2 - SCREEN_W // 2)
+        camera_y = int(player.y + player.size // 2 - SCREEN_H // 2)
+        
+        screen.fill((10, 10, 15))
+        dungeon.draw(screen, camera_x, camera_y)
+        
+        for item in item_pickups:
+            item.draw(screen, camera_x, camera_y)
+        
+        active_enemies = dungeon.get_active_enemies()
+        for enemy in active_enemies:
+            enemy.draw(screen, camera_x, camera_y)
+        
+        player.draw(screen, camera_x, camera_y)
+        
+        ui.draw_hud(screen, player, floors_cleared, enemies_killed, time.time() - start_time)
+    
+    return 'quit', floors_cleared, enemies_killed, time.time() - start_time
+
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+    pygame.display.set_caption("Dungeon Roguelike")
+    clock = pygame.time.Clock()
+    ui = UI(SCREEN_W, SCREEN_H)
+    
+    state = 'menu'
+    result_data = None
+    
+    while True:
+        if state == 'menu':
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    pygame.quit(); sys.exit()
+            
+            action = ui.draw_menu(screen)
+            if action == 'start':
+                state = 'game'
+            pygame.display.flip()
+            clock.tick(FPS)
+        
+        elif state == 'game':
+            outcome, floors, kills, elapsed = run_game(screen, clock)
+            if outcome == 'quit':
+                pygame.quit(); sys.exit()
+            elif outcome == 'dead':
+                result_data = (floors, kills, elapsed)
+                state = 'death'
+        
+        elif state == 'death':
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        pygame.quit(); sys.exit()
+            
+            action = ui.draw_death(screen, *result_data)
+            if action == 'menu':
+                state = 'menu'
+            elif action == 'restart':
+                state = 'game'
+            pygame.display.flip()
+            clock.tick(FPS)
+
+
+if __name__ == '__main__':
+    main()
