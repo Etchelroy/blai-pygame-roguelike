@@ -1,42 +1,79 @@
 import pygame
-import math
+import random
+
+TILE_SIZE = 32
+
+ITEM_CONFIGS = {
+    "health": {
+        "name": "Health Potion",
+        "color": (220, 60, 60),
+        "description": "Restores 40 HP",
+    },
+    "damage": {
+        "name": "Damage Crystal",
+        "color": (255, 140, 0),
+        "description": "+15 Damage for 20s",
+    },
+    "speed": {
+        "name": "Swift Boots",
+        "color": (60, 220, 120),
+        "description": "+50 Speed for 20s",
+    },
+}
 
 class Item:
-    TYPES = {
-        "health": {"color": (80, 220, 80), "label": "HP", "symbol": "+"},
-        "damage": {"color": (220, 80, 80), "label": "DMG", "symbol": "D"},
-        "speed":  {"color": (80, 160, 220), "label": "SPD", "symbol": "S"},
-    }
-
     def __init__(self, x, y, item_type):
         self.x = float(x)
         self.y = float(y)
         self.item_type = item_type
-        self.radius = 14
-        self.bob_timer = 0.0
-        info = self.TYPES.get(item_type, self.TYPES["health"])
-        self.color = info["color"]
-        self.label = info["label"]
-        self.symbol = info["symbol"]
-        self.font = pygame.font.SysFont("Arial", 14, bold=True)
+        cfg = ITEM_CONFIGS.get(item_type, ITEM_CONFIGS["health"])
+        self.name = cfg["name"]
+        self.color = cfg["color"]
+        self.description = cfg["description"]
+        self.w = 20
+        self.h = 20
+        self.bob_timer = random.uniform(0, math.pi * 2)
+
+    @property
+    def rect(self):
+        return pygame.Rect(int(self.x - self.w // 2), int(self.y - self.h // 2), self.w, self.h)
 
     def apply(self, player):
         if self.item_type == "health":
-            player.health = min(player.max_health, player.health + 30)
+            player.hp = min(player.max_hp, player.hp + 40)
         elif self.item_type == "damage":
-            player.damage = int(player.damage * 1.25)
+            player.damage = player.base_damage + 15
+            player.damage_boost_timer = 20.0
         elif self.item_type == "speed":
-            player.speed = min(400, player.speed + 40)
+            player.speed = player.base_speed + 50
+            player.speed_boost_timer = 20.0
 
-    def update(self, dt):
-        self.bob_timer += dt
+    def render(self, screen, cam_x, cam_y):
+        import math
+        self.bob_timer += 0.05
+        bob = int(math.sin(self.bob_timer) * 3)
+        sx = int(self.x - cam_x)
+        sy = int(self.y - cam_y) + bob
 
-    def draw(self, screen):
-        bob = math.sin(self.bob_timer * 3) * 4
-        cx = int(self.x)
-        cy = int(self.y + bob)
-        pygame.draw.circle(screen, (30, 30, 30), (cx + 2, cy + 2), self.radius)
-        pygame.draw.circle(screen, self.color, (cx, cy), self.radius)
-        pygame.draw.circle(screen, (255, 255, 255), (cx, cy), self.radius, 2)
-        label = self.font.render(self.symbol, True, (255, 255, 255))
-        screen.blit(label, label.get_rect(center=(cx, cy)))
+        # shadow
+        pygame.draw.ellipse(screen, (20, 20, 20),
+                            (sx - 10, sy + 8, 20, 6))
+        # gem shape
+        points = [
+            (sx, sy - 12),
+            (sx + 9, sy - 3),
+            (sx + 9, sy + 5),
+            (sx, sy + 12),
+            (sx - 9, sy + 5),
+            (sx - 9, sy - 3),
+        ]
+        pygame.draw.polygon(screen, self.color, points)
+        highlight = tuple(min(255, c + 80) for c in self.color)
+        pygame.draw.polygon(screen, highlight, [
+            (sx, sy - 12),
+            (sx + 9, sy - 3),
+            (sx, sy - 2),
+        ])
+        pygame.draw.polygon(screen, (255, 255, 255, 120), points, 1)
+
+import math
