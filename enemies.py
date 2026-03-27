@@ -1,157 +1,199 @@
 import pygame
 import math
 import random
-from projectiles import Projectile
+
+TILE_SIZE = 32
 
 class BaseEnemy:
-    def __init__(self, x, y, radius, health, damage, speed, color):
+    def __init__(self, x, y, hp, speed, damage, xp_value, color, floor):
         self.x = float(x)
         self.y = float(y)
-        self.radius = radius
-        self.health = health
-        self.max_health = health
-        self.damage = damage
+        self.hp = hp
+        self.max_hp = hp
         self.speed = speed
+        self.damage = damage
+        self.xp_value = xp_value
         self.color = color
-        self.vx = 0.0
-        self.vy = 0.0
-        self._melee_timer = 0.0
-        self.melee_cooldown = 1.0
+        self.w = 24
+        self.h = 24
+        self.floor = floor
+        self.attack_cooldown = 0.0
 
-    def melee_attack_ready(self):
-        if self._melee_timer <= 0:
-            self._melee_timer = self.melee_cooldown
-            return True
-        return False
+    @property
+    def rect(self):
+        return pygame.Rect(int(self.x - self.w // 2), int(self.y - self.h // 2), self.w, self.h)
 
     def take_damage(self, amount):
-        self.health -= amount
-        if self.health < 0:
-            self.health = 0
+        self.hp -= amount
 
-    def move_toward(self, tx, ty, dt):
+    def _move_towards(self, tx, ty, dt, collision):
         dx = tx - self.x
         dy = ty - self.y
-        dist = math.hypot(dx, dy)
-        if dist > 0:
-            self.vx = (dx / dist) * self.speed
-            self.vy = (dy / dist) * self.speed
-        else:
-            self.vx = 0
-            self.vy = 0
-        self.x += self.vx * dt
-        self.y += self.vy * dt
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist < 2:
+            return
+        dx /= dist
+        dy /= dist
+        new_x = self.x + dx * self.speed * dt
+        new_y = self.y + dy * self.speed * dt
+        # X move
+        self.x = new_x
+        if collision.collides_with_wall(self.rect):
+            self.x -= dx * self.speed * dt
+        # Y move
+        self.y = new_y
+        if collision.collides_with_wall(self.rect):
+            self.y -= dy * self.speed * dt
 
-    def update(self, dt, player, projectiles, walls):
-        if self._melee_timer > 0:
-            self._melee_timer -= dt
-
-    def draw(self, screen):
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
-        bar_w = self.radius * 2
-        bar_h = 5
-        bx = int(self.x) - self.radius
-        by = int(self.y) - self.radius - 10
+    def _draw_health_bar(self, screen, sx, sy):
+        bar_w = 30
+        bar_h = 4
+        bx = sx - bar_w // 2
+        by = sy - 20
         pygame.draw.rect(screen, (80, 0, 0), (bx, by, bar_w, bar_h))
-        hp_ratio = max(0, self.health / self.max_health)
-        pygame.draw.rect(screen, (0, 200, 0), (bx, by, int(bar_w * hp_ratio), bar_h))
-
+        ratio = max(0, self.hp / self.max_hp)
+        pygame.draw.rect(screen, (200, 50, 50), (bx, by, int(bar_w * ratio), bar_h))
 
 class MeleeEnemy(BaseEnemy):
-    def __init__(self, x, y):
-        super().__init__(x, y, radius=20, health=60, damage=15, speed=130, color=(200, 80, 80))
+    def __init__(self, x, y, floor=1):
+        hp = 40 + floor * 10
+        speed = 90 + floor * 5
+        damage = 10 + floor * 2
+        super().__init__(x, y, hp, speed, damage, 10 + floor * 2, (200, 60, 60), floor)
+        self.melee_timer = 0.0
+        self.melee_rate = 0.8
 
-    def update(self, dt, player, projectiles, walls):
-        super().update(dt, player, projectiles, walls)
-        self.move_toward(player.x, player.y, dt)
+    def update(self, dt, player, proj_manager, collision):
+        self.melee_timer -= dt
+        dist = math.sqrt((player.x - self.x) ** 2 + (player.y - self.y) ** 2)
+        if dist > 30:
+            self._move_towards(player.x, player.y, dt, collision)
 
-    def draw(self, screen):
-        super().draw(screen)
-        pygame.draw.circle(screen, (240, 120, 120), (int(self.x), int(self.y)), self.radius, 2)
+    def melee_attack(self, player, dt):
+        if self.melee_timer <= 0:
+            player.take_damage(self.damage)
+            self.melee_timer = self.melee_rate
 
+    def render(self, screen, cam_x, cam_y):
+        sx = int(self.x - cam_x)
+        sy = int(self.y - cam_y)
+        pygame.draw.rect(screen, self.color, (sx - 12, sy - 12, 24, 24))
+        pygame.draw.rect(screen, (255, 100, 100), (sx - 12, sy - 12, 24, 24), 2)
+        self._draw_health_bar(screen, sx, sy)
 
 class RangedEnemy(BaseEnemy):
-    def __init__(self, x, y):
-        super().__init__(x, y, radius=18, health=40, damage=10, speed=80, color=(150, 80, 200))
-        self.shoot_cooldown = 2.0
-        self.shoot_timer = random.uniform(0.5, 2.0)
-        self.preferred_dist = 250
+    def __init__(self, x, y, floor=1):
+        hp = 25 + floor * 8
+        speed = 70 + floor * 4
+        damage = 8 + floor * 2
+        super().__init__(x, y, hp, speed, damage, 15 + floor * 2, (100, 60, 200), floor)
+        self.shoot_cooldown = 0.0
+        self.shoot_rate = 2.0
+        self.preferred_dist = 200
 
-    def update(self, dt, player, projectiles, walls):
-        super().update(dt, player, projectiles, walls)
+    def update(self, dt, player, proj_manager, collision):
+        self.shoot_cooldown -= dt
         dx = player.x - self.x
         dy = player.y - self.y
-        dist = math.hypot(dx, dy)
-        
+        dist = math.sqrt(dx * dx + dy * dy)
+
         if dist < self.preferred_dist - 30:
+            # move away
             if dist > 0:
                 self.x -= (dx / dist) * self.speed * dt
                 self.y -= (dy / dist) * self.speed * dt
         elif dist > self.preferred_dist + 30:
-            self.move_toward(player.x, player.y, dt)
-        
-        self.shoot_timer -= dt
-        if self.shoot_timer <= 0:
-            self.shoot_timer = self.shoot_cooldown
+            self._move_towards(player.x, player.y, dt, collision)
+
+        if self.shoot_cooldown <= 0 and dist < 350:
             if dist > 0:
-                proj = Projectile(self.x, self.y, dx / dist, dy / dist,
-                                  owner="enemy", damage=self.damage, speed=280, color=(220, 80, 220))
-                projectiles.append(proj)
+                ndx = dx / dist
+                ndy = dy / dist
+                proj_manager.spawn_enemy_projectile(self.x, self.y, ndx, ndy, self.damage)
+                self.shoot_cooldown = self.shoot_rate
 
-    def draw(self, screen):
-        super().draw(screen)
-        pygame.draw.circle(screen, (190, 120, 240), (int(self.x), int(self.y)), self.radius, 2)
-
+    def render(self, screen, cam_x, cam_y):
+        sx = int(self.x - cam_x)
+        sy = int(self.y - cam_y)
+        points = [
+            (sx, sy - 14),
+            (sx + 12, sy + 10),
+            (sx - 12, sy + 10),
+        ]
+        pygame.draw.polygon(screen, self.color, points)
+        pygame.draw.polygon(screen, (180, 130, 255), points, 2)
+        self._draw_health_bar(screen, sx, sy)
 
 class BossEnemy(BaseEnemy):
-    def __init__(self, x, y):
-        super().__init__(x, y, radius=40, health=400, damage=25, speed=70, color=(180, 30, 30))
-        self.shoot_cooldown = 1.0
-        self.shoot_timer = 1.0
+    def __init__(self, x, y, floor=1):
+        hp = 200 + floor * 40
+        speed = 60 + floor * 3
+        damage = 20 + floor * 5
+        super().__init__(x, y, hp, speed, damage, 80 + floor * 20, (200, 150, 30), floor)
+        self.shoot_cooldown = 0.0
+        self.shoot_rate = 1.0
         self.phase = 1
-        self.melee_cooldown = 0.8
+        self.melee_timer = 0.0
+        self.melee_rate = 1.2
+        self.w = 40
+        self.h = 40
 
-    def update(self, dt, player, projectiles, walls):
-        super().update(dt, player, projectiles, walls)
-        
-        if self.health < self.max_health * 0.5:
+    def update(self, dt, player, proj_manager, collision):
+        self.shoot_cooldown -= dt
+        self.melee_timer -= dt
+
+        if self.hp < self.max_hp * 0.5:
             self.phase = 2
-            self.speed = 110
-            self.shoot_cooldown = 0.5
 
-        self.move_toward(player.x, player.y, dt)
-        
-        self.shoot_timer -= dt
-        if self.shoot_timer <= 0:
-            self.shoot_timer = self.shoot_cooldown
+        dist = math.sqrt((player.x - self.x) ** 2 + (player.y - self.y) ** 2)
+
+        if dist > 60:
+            self._move_towards(player.x, player.y, dt, collision)
+
+        if self.shoot_cooldown <= 0 and dist < 450:
             dx = player.x - self.x
             dy = player.y - self.y
-            dist = math.hypot(dx, dy)
-            if dist > 0:
-                if self.phase == 1:
-                    proj = Projectile(self.x, self.y, dx / dist, dy / dist,
-                                      owner="enemy", damage=20, speed=320, color=(255, 60, 60))
-                    projectiles.append(proj)
-                else:
-                    spread = [-0.3, 0, 0.3]
-                    angle = math.atan2(dy, dx)
-                    for off in spread:
-                        a = angle + off
-                        proj = Projectile(self.x, self.y, math.cos(a), math.sin(a),
-                                          owner="enemy", damage=20, speed=320, color=(255, 100, 30))
-                        projectiles.append(proj)
+            d = math.sqrt(dx * dx + dy * dy)
+            if d > 0:
+                proj_manager.spawn_enemy_projectile(self.x, self.y, dx / d, dy / d, self.damage)
+                if self.phase == 2:
+                    angle = math.pi / 8
+                    for a in [-angle, angle]:
+                        ca = math.cos(a)
+                        sa = math.sin(a)
+                        ndx = ca * (dx / d) - sa * (dy / d)
+                        ndy = sa * (dx / d) + ca * (dy / d)
+                        proj_manager.spawn_enemy_projectile(self.x, self.y, ndx, ndy, self.damage * 0.7)
+            self.shoot_cooldown = self.shoot_rate if self.phase == 1 else 0.6
 
-    def draw(self, screen):
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
-        pygame.draw.circle(screen, (255, 80, 80), (int(self.x), int(self.y)), self.radius, 3)
-        bar_w = self.radius * 2
-        bar_h = 8
-        bx = int(self.x) - self.radius
-        by = int(self.y) - self.radius - 14
-        pygame.draw.rect(screen, (80, 0, 0), (bx, by, bar_w, bar_h))
-        hp_ratio = max(0, self.health / self.max_health)
-        color = (200, 0, 0) if self.phase == 2 else (0, 200, 0)
-        pygame.draw.rect(screen, color, (bx, by, int(bar_w * hp_ratio), bar_h))
-        font = pygame.font.SysFont("Arial", 14)
-        label = font.render("BOSS", True, (255, 200, 200))
-        screen.blit(label, (bx, by - 16))
+    def melee_attack(self, player, dt):
+        if self.melee_timer <= 0:
+            player.take_damage(self.damage)
+            self.melee_timer = self.melee_rate
+
+    def render(self, screen, cam_x, cam_y):
+        sx = int(self.x - cam_x)
+        sy = int(self.y - cam_y)
+        pygame.draw.rect(screen, self.color, (sx - 20, sy - 20, 40, 40))
+        pygame.draw.rect(screen, (255, 220, 80), (sx - 20, sy - 20, 40, 40), 3)
+        # crown
+        points = [
+            (sx - 18, sy - 20),
+            (sx - 14, sy - 28),
+            (sx - 10, sy - 22),
+            (sx, sy - 30),
+            (sx + 10, sy - 22),
+            (sx + 14, sy - 28),
+            (sx + 18, sy - 20),
+        ]
+        pygame.draw.lines(screen, (255, 220, 80), False, points, 2)
+        # health bar (wider for boss)
+        bar_w = 50
+        bx = sx - bar_w // 2
+        by = sy - 30
+        pygame.draw.rect(screen, (80, 0, 0), (bx, by, bar_w, 6))
+        ratio = max(0, self.hp / self.max_hp)
+        pygame.draw.rect(screen, (220, 180, 30), (bx, by, int(bar_w * ratio), 6))
+        # phase indicator
+        if self.phase == 2:
+            pygame.draw.circle(screen, (255, 80, 0), (sx, sy), 22, 2)
