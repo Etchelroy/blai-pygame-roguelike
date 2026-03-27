@@ -1,136 +1,91 @@
 import pygame
 import math
-import random
+from projectiles import Projectile
 
-class Enemy:
-    def __init__(self, x, y, enemy_type):
+class Player:
+    def __init__(self, x, y):
         self.x = x
         self.y = y
-        self.enemy_type = enemy_type
-        self.velocity_x = 0
-        self.velocity_y = 0
-        self.health = 0
-        self.max_health = 0
-        self.speed = 0
-        self.width = 0
-        self.height = 0
-        self.damage = 0
-        self.attack_cooldown = 0
-        self.attack_time = 0
-        self.projectiles = []
-
-        if enemy_type == 'rusher':
-            self.health = 20
-            self.max_health = 20
-            self.speed = 150
-            self.width = 18
-            self.height = 18
-            self.damage = 10
-            self.attack_cooldown = 1.0
-        elif enemy_type == 'ranged':
-            self.health = 30
-            self.max_health = 30
-            self.speed = 80
-            self.width = 16
-            self.height = 16
-            self.damage = 5
-            self.attack_cooldown = 1.5
-        elif enemy_type == 'boss':
-            self.health = 100
-            self.max_health = 100
-            self.speed = 120
-            self.width = 40
-            self.height = 40
-            self.damage = 20
-            self.attack_cooldown = 0.8
-
-    def update(self, dt, player):
-        self.attack_time = max(0, self.attack_time - dt)
-
-        dx = player.x - self.x
-        dy = player.y - self.y
-        dist = math.sqrt(dx**2 + dy**2)
-
-        if dist > 0:
-            dir_x = dx / dist
-            dir_y = dy / dist
+        self.radius = 8
+        self.speed = 200  # pixels per second
+        self.health = 100
+        self.max_health = 100
+        self.angle = 0
+        self.damage = 10
+        
+        # Dash mechanic
+        self.dash_speed = 600
+        self.dash_duration = 0.15
+        self.dash_cooldown = 0.5
+        self.dash_remaining = 0
+        self.dash_cooldown_remaining = 0
+    
+    def move(self, dx, dy, delta_time, dungeon):
+        """Move player with delta-time and collision detection"""
+        new_x = self.x + dx * self.speed * delta_time
+        new_y = self.y + dy * self.speed * delta_time
+        
+        if not dungeon.collides_with_walls(new_x, new_y, self.radius):
+            self.x = new_x
+            self.y = new_y
         else:
-            dir_x = dir_y = 0
-
-        if self.enemy_type == 'rusher':
-            self.velocity_x = dir_x * self.speed
-            self.velocity_y = dir_y * self.speed
-            if dist < 50 and self.attack_time <= 0:
-                self.attack_time = self.attack_cooldown
-        elif self.enemy_type == 'ranged':
-            if dist > 300:
-                self.velocity_x = dir_x * self.speed
-                self.velocity_y = dir_y * self.speed
-            else:
-                self.velocity_x *= 0.9
-                self.velocity_y *= 0.9
-
-            if dist < 400 and self.attack_time <= 0:
-                projectile = {
-                    'x': self.x,
-                    'y': self.y,
-                    'vx': dir_x * 250,
-                    'vy': dir_y * 250,
-                    'lifetime': 5.0,
-                    'radius': 4,
-                    'damage': self.damage
-                }
-                self.projectiles.append(projectile)
-                self.attack_time = self.attack_cooldown
-        elif self.enemy_type == 'boss':
-            if dist > 150:
-                self.velocity_x = dir_x * self.speed
-                self.velocity_y = dir_y * self.speed
-            else:
-                self.velocity_x *= 0.8
-                self.velocity_y *= 0.8
-
-            if dist < 350 and self.attack_time <= 0:
-                for angle_offset in [-0.3, 0, 0.3]:
-                    angle = math.atan2(dy, dx) + angle_offset
-                    projectile = {
-                        'x': self.x,
-                        'y': self.y,
-                        'vx': math.cos(angle) * 300,
-                        'vy': math.sin(angle) * 300,
-                        'lifetime': 5.0,
-                        'radius': 4,
-                        'damage': self.damage
-                    }
-                    self.projectiles.append(projectile)
-                self.attack_time = self.attack_cooldown
-
-        self.x += self.velocity_x * dt
-        self.y += self.velocity_y * dt
-
-        for projectile in self.projectiles[:]:
-            projectile['x'] += projectile['vx'] * dt
-            projectile['y'] += projectile['vy'] * dt
-            projectile['lifetime'] -= dt
-            if projectile['lifetime'] <= 0:
-                self.projectiles.remove(projectile)
-
-    def take_damage(self, damage):
-        self.health -= damage
-        return self.health <= 0
-
-    def get_rect(self):
-        return pygame.Rect(self.x - self.width // 2, self.y - self.height // 2, self.width, self.height)
-
-    def draw(self, surface):
-        if self.enemy_type == 'rusher':
-            color = (255, 0, 0)
-        elif self.enemy_type == 'ranged':
-            color = (0, 0, 255)
-        else:
-            color = (255, 100, 0)
-
-        pygame.draw.rect(surface, color, self.get_rect())
-
-        for projectile in self.projectiles:
-            pygame.draw.circle(surface, (255, 0, 255), (int(projectile['x']), int(projectile['y'])), projectile['radius'])
+            # Slide along walls
+            if not dungeon.collides_with_walls(new_x, self.y, self.radius):
+                self.x = new_x
+            elif not dungeon.collides_with_walls(self.x, new_y, self.radius):
+                self.y = new_y
+    
+    def attempt_dash(self, delta_time):
+        """Handle dash input"""
+        if self.dash_cooldown_remaining <= 0 and self.dash_remaining <= 0:
+            self.dash_remaining = self.dash_duration
+            self.dash_cooldown_remaining = self.dash_cooldown
+    
+    def update(self, delta_time):
+        """Update dash state"""
+        if self.dash_remaining > 0:
+            self.dash_remaining -= delta_time
+        if self.dash_cooldown_remaining > 0:
+            self.dash_cooldown_remaining -= delta_time
+    
+    def shoot(self):
+        """Create projectile at player angle"""
+        if self.dash_remaining > 0:
+            return None  # Can't shoot while dashing
+        
+        speed = 400
+        vx = math.cos(self.angle) * speed
+        vy = math.sin(self.angle) * speed
+        
+        return Projectile(
+            self.x + math.cos(self.angle) * 15,
+            self.y + math.sin(self.angle) * 15,
+            vx, vy, self.damage
+        )
+    
+    def take_damage(self, amount):
+        """Reduce health"""
+        self.health -= amount
+    
+    def heal(self, amount):
+        """Restore health"""
+        self.health = min(self.health + amount, self.max_health)
+    
+    def boost_damage(self, amount):
+        """Increase damage"""
+        self.damage += amount
+    
+    def boost_speed(self, amount):
+        """Increase speed"""
+        self.speed += amount
+    
+    def render(self, surface):
+        """Draw player"""
+        color = (100, 255, 100) if self.dash_remaining <= 0 else (200, 100, 255)
+        pygame.draw.circle(surface, color, (int(self.x), int(self.y)), self.radius)
+        
+        # Draw aiming line
+        end_x = self.x + math.cos(self.angle) * 30
+        end_y = self.y + math.sin(self.angle) * 30
+        pygame.draw.line(surface, (255, 255, 0), (int(self.x), int(self.y)), 
+                        (int(end_x), int(end_y)), 2)
