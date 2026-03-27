@@ -1,231 +1,250 @@
 import pygame
+import sys
+import time
 from player import Player
 from dungeon import Dungeon
 from enemies import MeleeEnemy, RangedEnemy, BossEnemy
 from items import Item
-from collision import check_wall_collision, check_entity_collision
+from projectiles import ProjectileManager
 from hud import HUD
-import random
-import time
-
-STATE_PLAYING = "playing"
-STATE_DEATH = "death"
-STATE_ITEM_PICKUP = "item_pickup"
+from screens import DeathScreen, MainMenuScreen, LevelUpScreen
+from collision import CollisionSystem
 
 class Game:
     def __init__(self, screen):
         self.screen = screen
-        self.width = screen.get_width()
-        self.height = screen.get_height()
-        self.state = STATE_PLAYING
-        self.font_large = pygame.font.SysFont("Arial", 72, bold=True)
-        self.font_medium = pygame.font.SysFont("Arial", 36)
-        self.font_small = pygame.font.SysFont("Arial", 24)
-        self.reset()
-
-    def reset(self):
-        self.dungeon = Dungeon(self.width, self.height)
-        self.player = Player(self.width // 2, self.height // 2)
-        self.enemies = []
-        self.projectiles = []
-        self.items = []
+        self.state = "menu"  # menu, playing, dead, levelup
+        self.clock_start = 0.0
+        self.time_survived = 0.0
         self.floors_cleared = 0
         self.enemies_killed = 0
-        self.start_time = time.time()
-        self.hud = HUD(self.screen)
-        self.pending_items = []
-        self.spawn_enemies()
-        self.state = STATE_PLAYING
-        self.death_time = 0
+        self.current_floor = 1
 
-    def spawn_enemies(self):
+        self.dungeon = None
+        self.player = None
         self.enemies = []
-        room = self.dungeon.current_room
-        cx, cy = room.center()
-        count = 3 + self.floors_cleared * 2
-        
-        if self.floors_cleared > 0 and self.floors_cleared % 3 == 0:
-            boss = BossEnemy(cx, cy - 100)
-            self.enemies.append(boss)
-            count = max(0, count - 3)
-        
-        for _ in range(count):
-            attempts = 0
-            while attempts < 20:
-                x = random.randint(room.x + 60, room.x + room.w - 60)
-                y = random.randint(room.y + 60, room.y + room.h - 60)
-                dx = abs(x - self.player.x)
-                dy = abs(y - self.player.y)
-                if dx > 150 or dy > 150:
-                    if random.random() < 0.4:
-                        self.enemies.append(RangedEnemy(x, y))
-                    else:
-                        self.enemies.append(MeleeEnemy(x, y))
-                    break
-                attempts += 1
+        self.items = []
+        self.proj_manager = None
+        self.hud = None
+        self.collision = None
 
-    def spawn_items_between_rooms(self):
-        room = self.dungeon.current_room
-        cx, cy = room.center()
-        count = random.randint(1, 3)
-        offsets = [(-80, 0), (80, 0), (0, -80)]
-        random.shuffle(offsets)
-        item_types = ["health", "damage", "speed"]
-        for i in range(min(count, 3)):
-            ox, oy = offsets[i]
-            itype = random.choice(item_types)
-            self.items.append(Item(cx + ox, cy + oy, itype))
+        self.death_screen = DeathScreen(screen)
+        self.main_menu = MainMenuScreen(screen)
+        self.levelup_screen = LevelUpScreen(screen)
 
-    def handle_events(self, events):
-        if self.state == STATE_DEATH:
-            for event in events:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_r:
-                        self.reset()
-                    if event.key == pygame.K_ESCAPE:
-                        import sys
-                        pygame.quit()
-                        sys.exit()
-            return
+        self.camera_x = 0
+        self.camera_y = 0
 
-        mouse_pos = pygame.mouse.get_pos()
-        for event in events:
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:
-                    proj = self.player.shoot(mouse_pos)
-                    if proj:
-                        self.projectiles.append(proj)
+        self.message_log = []
+        self.levelup_pending = False
+
+        self.font = pygame.font.SysFont("monospace", 16)
+
+    def show_main_menu(self):
+        self.state = "menu"
+
+    def start_game(self):
+        self.state = "playing"
+        self.floors_cleared = 0
+        self.enemies_killed = 0
+        self.time_survived = 0.0
+        self.clock_start = time.time()
+        self.current_floor = 1
+        self.message_log = []
+        self.levelup_pending = False
+        self._load_floor()
+
+    def _load_floor(self):
+        self.dungeon = Dungeon(self.current_floor)
+        spawn = self.dungeon.get_player_spawn()
+        self.player = Player(spawn[0], spawn[1])
+        self.proj_manager = ProjectileManager()
+        self.collision = CollisionSystem(self.dungeon)
+        self.hud = HUD(self.screen, self.player, self.dungeon)
+        self.enemies = self._spawn_enemies()
+        self.items = []
+        self._update_camera()
+
+    def _spawn_enemies(self):
+        enemies = []
+        rooms = self.dungeon.rooms[1:]  # skip spawn room
+        floor = self.current_floor
+        for i, room in enumerate(rooms):
+            cx = (room[0] + room[2] // 2) * 32
+            cy = (room[1] + room[3] // 2) * 32
+            if i == len(rooms) - 1:
+                boss = BossEnemy(cx, cy, floor)
+                enemies.append(boss)
+            else:
+                num_melee = 1 + floor // 2
+                num_ranged = floor // 2
+                for j in range(num_melee):
+                    ex = cx + (j - num_melee // 2) * 40
+                    ey = cy + 20
+                    enemies.append(MeleeEnemy(ex, ey, floor))
+                for j in range(num_ranged):
+                    ex = cx + (j - num_ranged // 2) * 50
+                    ey = cy - 20
+                    enemies.append(RangedEnemy(ex, ey, floor))
+        return enemies
+
+    def handle_event(self, event):
+        if self.state == "menu":
+            result = self.main_menu.handle_event(event)
+            if result == "start":
+                self.start_game()
+            elif result == "quit":
+                pygame.quit()
+                sys.exit()
+
+        elif self.state == "playing":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = pygame.mouse.get_pos()
+                wx = mx + self.camera_x
+                wy = my + self.camera_y
+                self.player.shoot(wx, wy, self.proj_manager)
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     self.player.dash()
 
+        elif self.state == "dead":
+            result = self.death_screen.handle_event(event)
+            if result == "restart":
+                self.start_game()
+            elif result == "menu":
+                self.show_main_menu()
+
+        elif self.state == "levelup":
+            result = self.levelup_screen.handle_event(event)
+            if result:
+                self.player.apply_levelup(result)
+                self.levelup_pending = False
+                self.state = "playing"
+
     def update(self, dt):
-        if self.state == STATE_DEATH:
+        if self.state != "playing":
             return
+
+        self.time_survived = time.time() - self.clock_start
 
         keys = pygame.key.get_pressed()
-        self.player.handle_movement(keys, dt)
-        self.player.update(dt)
+        self.player.update(dt, keys, self.collision)
 
-        room = self.dungeon.current_room
-        walls = room.get_walls()
-        
-        # Wall collision for player
-        check_wall_collision(self.player, walls)
-        
-        # Keep player in room
-        self.player.x = max(room.x + self.player.radius, min(room.x + room.w - self.player.radius, self.player.x))
-        self.player.y = max(room.y + self.player.radius, min(room.y + room.h - self.player.radius, self.player.y))
+        self._update_camera()
 
-        # Update enemies
+        # update projectiles
+        self.proj_manager.update(dt, self.collision)
+
+        # update enemies
         for enemy in self.enemies[:]:
-            enemy.update(dt, self.player, self.projectiles, walls)
-            check_wall_collision(enemy, walls)
-            enemy.x = max(room.x + enemy.radius, min(room.x + room.w - enemy.radius, enemy.x))
-            enemy.y = max(room.y + enemy.radius, min(room.y + room.h - enemy.radius, enemy.y))
-            
-            if check_entity_collision(self.player, enemy):
-                if enemy.melee_attack_ready():
-                    self.player.take_damage(enemy.damage)
-
-        # Update projectiles
-        for proj in self.projectiles[:]:
-            proj.update(dt)
-            
-            hit_wall = False
-            for wall in walls:
-                if wall.collidepoint(proj.x, proj.y):
-                    hit_wall = True
-                    break
-            
-            if hit_wall or proj.is_expired():
-                self.projectiles.remove(proj)
-                continue
-            
-            if proj.owner == "player":
-                for enemy in self.enemies[:]:
-                    if check_entity_collision(proj, enemy):
-                        enemy.take_damage(self.player.damage)
-                        if proj in self.projectiles:
-                            self.projectiles.remove(proj)
-                        if enemy.health <= 0:
-                            self.enemies.remove(enemy)
-                            self.enemies_killed += 1
+            enemy.update(dt, self.player, self.proj_manager, self.collision)
+            # check player projectile hits on enemy
+            for proj in self.proj_manager.player_projectiles[:]:
+                if enemy.rect.colliderect(proj.rect):
+                    dmg = proj.damage
+                    enemy.take_damage(dmg)
+                    self.proj_manager.player_projectiles.remove(proj)
+                    if enemy.hp <= 0:
+                        self.enemies_killed += 1
+                        self._drop_item(enemy.x, enemy.y)
+                        self.enemies.remove(enemy)
+                        self.player.gain_xp(enemy.xp_value)
+                        if self.player.level_up_ready:
+                            self.player.level_up_ready = False
+                            self.levelup_pending = True
                         break
-            elif proj.owner == "enemy":
-                if check_entity_collision(proj, self.player):
-                    self.player.take_damage(proj.damage)
-                    if proj in self.projectiles:
-                        self.projectiles.remove(proj)
 
-        # Check items
+            # check enemy projectile hits on player
+            for proj in self.proj_manager.enemy_projectiles[:]:
+                if self.player.rect.colliderect(proj.rect):
+                    self.player.take_damage(proj.damage)
+                    self.proj_manager.enemy_projectiles.remove(proj)
+
+        # check melee enemy collision with player
+        for enemy in self.enemies:
+            if hasattr(enemy, 'melee_attack'):
+                if enemy.rect.colliderect(self.player.rect):
+                    enemy.melee_attack(self.player, dt)
+
+        # pickup items
         for item in self.items[:]:
-            if check_entity_collision(self.player, item):
+            if self.player.rect.colliderect(item.rect):
                 item.apply(self.player)
                 self.items.remove(item)
+                self.message_log.append(f"Picked up: {item.name}")
+                if len(self.message_log) > 5:
+                    self.message_log.pop(0)
 
-        # Check floor clear
-        if len(self.enemies) == 0:
-            self.floors_cleared += 1
-            self.projectiles.clear()
-            self.items.clear()
-            self.dungeon.next_room()
-            room = self.dungeon.current_room
-            cx, cy = room.center()
-            self.player.x = cx
-            self.player.y = cy
-            self.spawn_enemies()
-            self.spawn_items_between_rooms()
-
-        # Check death
-        if self.player.health <= 0:
-            self.state = STATE_DEATH
-            self.death_time = time.time()
-
-    def draw(self):
-        self.screen.fill((20, 20, 30))
-        
-        if self.state == STATE_DEATH:
-            self.draw_death_screen()
+        # check player death
+        if self.player.hp <= 0:
+            self.state = "dead"
+            self.death_screen.set_stats(self.floors_cleared, self.enemies_killed, self.time_survived)
             return
 
-        self.dungeon.draw(self.screen)
-        
-        for item in self.items:
-            item.draw(self.screen)
-        
-        for enemy in self.enemies:
-            enemy.draw(self.screen)
-        
-        for proj in self.projectiles:
-            proj.draw(self.screen)
-        
-        self.player.draw(self.screen)
-        
-        elapsed = time.time() - self.start_time
-        self.hud.draw(self.player, self.floors_cleared, self.enemies_killed, elapsed)
+        # check floor cleared
+        if len(self.enemies) == 0:
+            self.floors_cleared += 1
+            self.current_floor += 1
+            self.levelup_pending = False
+            self._load_floor()
+            return
 
-    def draw_death_screen(self):
-        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
-        self.screen.blit(overlay, (0, 0))
-        
-        elapsed = self.death_time - self.start_time
-        minutes = int(elapsed) // 60
-        seconds = int(elapsed) % 60
-        
-        title = self.font_large.render("YOU DIED", True, (220, 50, 50))
-        self.screen.blit(title, title.get_rect(center=(self.width // 2, self.height // 2 - 160)))
-        
-        stats = [
-            f"Floors Cleared: {self.floors_cleared}",
-            f"Enemies Killed: {self.enemies_killed}",
-            f"Time Survived: {minutes:02d}:{seconds:02d}",
-        ]
-        
-        for i, stat in enumerate(stats):
-            surf = self.font_medium.render(stat, True, (220, 220, 220))
-            self.screen.blit(surf, surf.get_rect(center=(self.width // 2, self.height // 2 - 60 + i * 50)))
-        
-        hint = self.font_small.render("Press R to Restart   |   ESC to Quit", True, (160, 160, 160))
-        self.screen.blit(hint, hint.get_rect(center=(self.width // 2, self.height // 2 + 120)))
+        if self.levelup_pending:
+            self.state = "levelup"
+            self.levelup_screen.activate()
+            self.levelup_pending = False
+
+        self.hud.update(self.message_log)
+
+    def _drop_item(self, x, y):
+        import random
+        if random.random() < 0.4:
+            itype = random.choice(["health", "damage", "speed"])
+            self.items.append(Item(x, y, itype))
+
+    def _update_camera(self):
+        self.camera_x = int(self.player.x - 480)
+        self.camera_y = int(self.player.y - 360)
+
+    def render(self):
+        self.screen.fill((10, 10, 20))
+
+        if self.state == "menu":
+            self.main_menu.render()
+
+        elif self.state == "playing":
+            self._render_game()
+
+        elif self.state == "dead":
+            self.death_screen.render()
+
+        elif self.state == "levelup":
+            self._render_game()
+            self.levelup_screen.render()
+
+    def _render_game(self):
+        # Draw dungeon
+        self.dungeon.render(self.screen, self.camera_x, self.camera_y)
+
+        # Draw items
+        for item in self.items:
+            item.render(self.screen, self.camera_x, self.camera_y)
+
+        # Draw enemies (depth sorted)
+        all_entities = self.enemies[:]
+        all_entities.append(self.player)
+        all_entities.sort(key=lambda e: e.y)
+
+        for entity in all_entities:
+            entity.render(self.screen, self.camera_x, self.camera_y)
+
+        # Draw projectiles
+        self.proj_manager.render(self.screen, self.camera_x, self.camera_y)
+
+        # Draw HUD
+        self.hud.render()
+
+        # Draw message log
+        for i, msg in enumerate(self.message_log):
+            surf = self.font.render(msg, True, (255, 220, 100))
+            self.screen.blit(surf, (10, 600 - i * 20))
