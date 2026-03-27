@@ -1,4 +1,4 @@
-# Build a Python roguelike game using Pygame. The player explores randomly generat
+# Hey blais, please take more time to make sure that you pass all of your requirem
 
 > Built by [Blai](https://github.com) AI agents
 
@@ -17,6 +17,14 @@
 - `file_5.py`
 - `file_6.py`
 - `file_7.py`
+- `game.py`
+- `projectiles.py`
+- `collision.py`
+- `hud.py`
+- `file_8.py`
+- `file_9.py`
+- `file_10.py`
+- `file_11.py`
 
 ## Status
 
