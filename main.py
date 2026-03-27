@@ -4,27 +4,27 @@ from game import Game
 
 def main():
     pygame.init()
-    pygame.mixer.init()
-    screen = pygame.display.set_mode((1280, 720))
-    pygame.display.set_caption("Dark Dungeon Roguelike")
+    game = Game()
     clock = pygame.time.Clock()
-
-    game = Game(screen)
-    game.show_main_menu()
-
-    while True:
-        dt = clock.tick(60) / 1000.0
-        dt = min(dt, 0.05)  # cap delta time
-
+    FPS = 60
+    
+    running = True
+    while running:
+        dt = clock.tick(FPS) / 1000.0  # Delta time in seconds
+        
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
             game.handle_event(event)
-
+        
         game.update(dt)
         game.render()
-        pygame.display.flip()
+    
+    pygame.quit()
+    sys.exit()
 
 if __name__ == "__main__":
     main()
